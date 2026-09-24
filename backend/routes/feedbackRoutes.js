@@ -6,11 +6,12 @@ const {
   getAllFeedback
 } = require('../controllers/feedbackController');
 const { protect, restrictTo } = require('../middleware/auth');
+const { validateId } = require('../utils/access');
 
 router.use(protect);
 
 router.post('/', restrictTo('USER'), submitFeedback);
-router.get('/:complaintId', getFeedbackForComplaint);
+router.get('/:complaintId', validateId('complaintId'), getFeedbackForComplaint);
 router.get('/', restrictTo('ADMIN'), getAllFeedback);
 
 module.exports = router;

@@ -2,8 +2,8 @@ const mongoose = require('mongoose');
 
 const complaintSchema = new mongoose.Schema(
   {
-    title: { type: String, required: true, trim: true },
-    description: { type: String, required: true },
+    title: { type: String, required: true, trim: true, maxlength: 120 },
+    description: { type: String, required: true, maxlength: 2000 },
     category: {
       type: String,
       required: true,
@@ -22,7 +22,8 @@ const complaintSchema = new mongoose.Schema(
       {
         status: String,
         changedAt: { type: Date, default: Date.now },
-        changedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }
+        changedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+        note: { type: String, default: '' }
       }
     ]
   },

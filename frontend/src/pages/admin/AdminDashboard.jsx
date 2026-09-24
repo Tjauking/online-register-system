@@ -1,99 +1,196 @@
-import { useEffect, useState } from 'react'
-import {
-  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend,
-  LineChart, Line, PieChart, Pie, Cell, ResponsiveContainer
-} from 'recharts'
+import { useEffect, useMemo, useState } from 'react'
+import { Link } from 'react-router-dom'
+import { ArrowRight, Download, Inbox, Loader2, RefreshCw, SlidersHorizontal, Sparkles } from 'lucide-react'
 import api from '../../api/axios'
-import Navbar from '../../components/Navbar'
+import AppShell from '../../components/AppShell'
+import ComplaintTable from '../../components/ComplaintTable'
+import { Empty, Metric, PageHeader, Section, SkeletonRows } from '../../components/ui'
+import { formatDate, isOverdue, matches, monthDelta } from '../../lib/format'
+import { aiError, useAiStatus } from '../../lib/ai'
+import { downloadComplaintsCsv } from '../../lib/csv'
 
-const COLORS = ['#c00000', '#1d4ed8', '#16a34a', '#d97706', '#7c3aed', '#0891b2']
-const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+
+// Server returns sparse {year, month} groups; fill the last six months with zeros
+const lastSixMonths = (byMonth, field) => {
+  const now = new Date()
+  return Array.from({ length: 6 }, (_, i) => {
+    const d = new Date(now.getFullYear(), now.getMonth() - (5 - i), 1)
+    const hit = byMonth.find((m) => m._id.year === d.getFullYear() && m._id.month === d.getMonth() + 1)
+    return { label: MONTHS[d.getMonth()], value: hit ? hit[field] : 0 }
+  })
+}
+
+function HBarList({ items, empty }) {
+  if (!items.length) return <p className="muted">{empty}</p>
+  const max = Math.max(1, ...items.map((i) => i.max ?? i.value))
+  return (
+    <div className="hbar-list">
+      {items.map((item) => (
+        <div key={item.label}>
+          <div className="hbar-head">
+            <span>{item.label}</span>
+            <span className="mono">{item.caption ?? item.value}</span>
+          </div>
+          <div className="hbar-track">
+            <div className="hbar-fill" style={{ width: `${((item.value / (item.max ?? max)) * 100).toFixed(1)}%` }} />
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
 
 export default function AdminDashboard() {
   const [data, setData] = useState(null)
+  const [complaints, setComplaints] = useState(null)
+  const [query, setQuery] = useState('')
+  const [insight, setInsight] = useState(null)
+  const [insightState, setInsightState] = useState('idle')
+  const [insightError, setInsightError] = useState('')
+  const ai = useAiStatus()
+
+  const loadInsight = async (refresh = false) => {
+    setInsightState('loading')
+    setInsightError('')
+    try {
+      const { data } = await api.get(`/ai/insights${refresh ? '?refresh=1' : ''}`)
+      setInsight(data)
+      setInsightState('done')
+    } catch (err) {
+      setInsightError(aiError(err))
+      setInsightState('error')
+    }
+  }
 
   useEffect(() => {
-    api.get('/admin/analytics').then(r => setData(r.data)).catch(() => {})
+    if (ai.enabled) loadInsight()
+  }, [ai.enabled])
+
+  useEffect(() => {
+    api.get('/admin/analytics').then((r) => setData(r.data)).catch(() => {})
+    api.get('/complaints').then((r) => setComplaints(r.data.complaints)).catch(() => setComplaints([]))
   }, [])
 
-  if (!data) return <div><Navbar /><div style={{ textAlign: 'center', padding: '60px', color: '#888' }}>Loading analytics...</div></div>
+  const derived = useMemo(() => {
+    if (!data) return null
+    const categories = [...data.byCategory].sort((a, b) => b.count - a.count)
+    const top = categories[0]
+    return {
+      total: lastSixMonths(data.byMonth, 'count'),
+      open: lastSixMonths(data.byMonth, 'open'),
+      resolved: lastSixMonths(data.byMonth, 'resolved'),
+      high: lastSixMonths(data.byMonth, 'high'),
+      top,
+      topShare: top && data.totalComplaints ? Math.round((top.count / data.totalComplaints) * 100) : 0,
+      rate: data.totalComplaints ? Math.round((data.resolvedComplaints / data.totalComplaints) * 100) : 0,
+      categories: categories.map((c) => ({ label: c._id, value: c.count })),
+      agents: [...data.agentPerformance]
+        .sort((a, b) => b.resolved - a.resolved)
+        .map((a) => ({ label: a.agentName, value: a.resolved, max: a.total, caption: `${a.resolved}/${a.total} resolved` }))
+    }
+  }, [data])
 
-  const statCards = [
-    { label: 'Total Complaints', value: data.totalComplaints, color: '#c00000', icon: '📋' },
-    { label: 'Open', value: data.openComplaints, color: '#d97706', icon: '⏳' },
-    { label: 'Resolved', value: data.resolvedComplaints, color: '#16a34a', icon: '✅' },
-    { label: 'Total Users', value: data.totalUsers, color: '#1d4ed8', icon: '👥' },
-    { label: 'Active Agents', value: data.activeAgents, color: '#7c3aed', icon: '🧑‍💼' },
-    { label: 'Avg Rating', value: data.avgRating?.toFixed(1) || '0.0', color: '#f59e0b', icon: '⭐' }
-  ]
+  const overdue = (complaints || []).filter(isOverdue).length
 
-  const monthData = data.byMonth.map(m => ({
-    name: `${MONTHS[m._id.month - 1]} ${m._id.year}`,
-    complaints: m.count
-  }))
+  const recent = (complaints || [])
+    .filter((c) => matches(query, c.title, c.category, c.status, c.priority, c.description, c.userId?.name, c.agentId?.name))
+    .slice(0, 8)
 
-  const categoryData = data.byCategory.map(c => ({ name: c._id, value: c.count }))
+  const actions = (
+    <>
+      <Link to="/admin/complaints" className="btn btn-outline"><SlidersHorizontal />All complaints</Link>
+      <button className="btn btn-dark" onClick={() => downloadComplaintsCsv(complaints || [])} disabled={!complaints?.length}>
+        <Download />Export
+      </button>
+    </>
+  )
 
   return (
-    <div>
-      <Navbar />
-      <div style={{ maxWidth: '1200px', margin: '0 auto', padding: '32px 24px' }}>
-        <h1 style={{ fontSize: '26px', fontWeight: 700, color: '#1a1a2e', marginBottom: '28px' }}>Admin Dashboard</h1>
+    <AppShell title="Overview" search={query} onSearch={setQuery} searchPlaceholder="Search recent complaints…">
+      <PageHeader title="Overview" subtitle="How complaints are flowing across the team" actions={actions} />
 
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '20px', marginBottom: '32px' }}>
-          {statCards.map((s, i) => (
-            <div key={i} style={{ background: '#fff', borderRadius: '12px', padding: '24px', boxShadow: '0 2px 12px rgba(0,0,0,0.06)', borderLeft: `4px solid ${s.color}` }}>
-              <div style={{ fontSize: '28px', marginBottom: '8px' }}>{s.icon}</div>
-              <div style={{ fontSize: '32px', fontWeight: 800, color: s.color }}>{s.value}</div>
-              <div style={{ fontSize: '13px', color: '#6b7280', marginTop: '4px' }}>{s.label}</div>
+      {!data || !derived ? (
+        <div className="grid grid-summary">
+          <div className="skeleton" style={{ height: 300, borderRadius: 18 }} />
+          <div className="skeleton" style={{ height: 300, borderRadius: 18 }} />
+        </div>
+      ) : (
+        <>
+          <div className="grid grid-summary">
+            <Section
+              title={ai.enabled ? 'AI insights' : 'Insights'}
+              icon={<span className="spark-icon"><Sparkles /></span>}
+              actions={ai.enabled && (
+                <button className="btn btn-ai btn-sm" onClick={() => loadInsight(true)} disabled={insightState === 'loading'} title="Generate fresh insights">
+                  {insightState === 'loading' ? <Loader2 className="spin" /> : <RefreshCw />}{insightState === 'loading' ? 'Thinking…' : 'Refresh'}
+                </button>
+              )}
+              subtitle={insight?.insight ? insight.insight : data.totalComplaints === 0 ? 'No complaints have been submitted yet. Metrics fill in as soon as the first one arrives.' : (
+                <>
+                  <strong>{derived.top._id}</strong> is the most common category at <strong>{derived.topShare}%</strong> of all complaints.{' '}
+                  {data.unassigned > 0
+                    ? <><strong>{data.unassigned} waiting</strong> for an agent{data.highOpen > 0 && <>, and {data.highOpen} open complaint{data.highOpen === 1 ? ' is' : 's are'} high priority</>}.</>
+                    : <>Every open complaint has an agent.</>}
+                  {overdue > 0 && <> <strong>{overdue} overdue</strong> against their response targets.</>}
+                </>
+              )}
+              bodyClassName="section-pad"
+            >
+              <div style={{ fontWeight: 500, marginBottom: 12 }}>Team snapshot</div>
+              <div className="stat-grid">
+                <div className="stat-box">
+                  <div className="stat-box-value">{derived.rate}%</div>
+                  <div className="stat-box-label">Resolution rate</div>
+                </div>
+                <div className="stat-box">
+                  <div className="stat-box-value">{data.ratingCount ? `${data.avgRating.toFixed(1)}/5` : '—'}</div>
+                  <div className="stat-box-label">Customer rating</div>
+                </div>
+              </div>
+              <div className="meta-line" style={{ marginTop: 18 }}>
+                <span>Last updated:<b>{formatDate(new Date())}</b></span>
+                <span>Active agents:<b>{data.activeAgents}</b></span>
+                <span>Overdue:<b>{overdue}</b></span>
+              </div>
+              {insightState === 'error' && <p className="muted" style={{ fontSize: 12.5, marginTop: 10 }}>AI insights unavailable: {insightError}</p>}
+              {ai.loaded && !ai.enabled && (
+                <p className="muted" style={{ fontSize: 12.5, marginTop: 10 }}>
+                  Add an <span className="mono">NVIDIA_API_KEY</span> to turn on AI insights — see <Link to="/settings" style={{ textDecoration: 'underline' }}>Settings</Link>.
+                </p>
+              )}
+            </Section>
+
+            <div className="metrics">
+              <Metric title="Total complaints" value={data.totalComplaints} delta={monthDelta(derived.total)} bars={derived.total} />
+              <Metric title="Open" value={data.openComplaints} caption="by month submitted" bars={derived.open} />
+              <Metric title="Resolved" value={data.resolvedComplaints} caption="by month submitted" bars={derived.resolved} />
+              <Metric title="High priority" value={data.highOpen} caption="open right now" bars={derived.high} />
             </div>
-          ))}
-        </div>
-
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px', marginBottom: '24px' }}>
-          <div style={{ background: '#fff', borderRadius: '12px', padding: '24px', boxShadow: '0 2px 12px rgba(0,0,0,0.06)' }}>
-            <h3 style={{ fontSize: '16px', fontWeight: 700, marginBottom: '20px', color: '#1a1a2e' }}>Complaints by Month</h3>
-            <ResponsiveContainer width="100%" height={240}>
-              <LineChart data={monthData}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                <XAxis dataKey="name" tick={{ fontSize: 11 }} />
-                <YAxis tick={{ fontSize: 11 }} />
-                <Tooltip />
-                <Line type="monotone" dataKey="complaints" stroke="#c00000" strokeWidth={2} dot={{ fill: '#c00000' }} />
-              </LineChart>
-            </ResponsiveContainer>
           </div>
 
-          <div style={{ background: '#fff', borderRadius: '12px', padding: '24px', boxShadow: '0 2px 12px rgba(0,0,0,0.06)' }}>
-            <h3 style={{ fontSize: '16px', fontWeight: 700, marginBottom: '20px', color: '#1a1a2e' }}>Complaints by Category</h3>
-            <ResponsiveContainer width="100%" height={240}>
-              <PieChart>
-                <Pie data={categoryData} cx="50%" cy="50%" outerRadius={90} dataKey="value" label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`} labelLine={false} fontSize={11}>
-                  {categoryData.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
-                </Pie>
-                <Tooltip />
-              </PieChart>
-            </ResponsiveContainer>
+          <div className="grid grid-2">
+            <Section title="By category" subtitle="Where complaints are coming from" bodyClassName="section-pad">
+              <HBarList items={derived.categories} empty="No complaints yet." />
+            </Section>
+            <Section title="Agent performance" subtitle="Resolved out of assigned, per agent" bodyClassName="section-pad">
+              <HBarList items={derived.agents} empty="No complaints have been assigned yet." />
+            </Section>
           </div>
-        </div>
+        </>
+      )}
 
-        {data.agentPerformance?.length > 0 && (
-          <div style={{ background: '#fff', borderRadius: '12px', padding: '24px', boxShadow: '0 2px 12px rgba(0,0,0,0.06)' }}>
-            <h3 style={{ fontSize: '16px', fontWeight: 700, marginBottom: '20px', color: '#1a1a2e' }}>Agent Performance</h3>
-            <ResponsiveContainer width="100%" height={240}>
-              <BarChart data={data.agentPerformance}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                <XAxis dataKey="agentName" tick={{ fontSize: 11 }} />
-                <YAxis tick={{ fontSize: 11 }} />
-                <Tooltip />
-                <Legend />
-                <Bar dataKey="total" name="Total Assigned" fill="#c00000" radius={[4, 4, 0, 0]} />
-                <Bar dataKey="resolved" name="Resolved" fill="#16a34a" radius={[4, 4, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
+      <Section
+        title="Recent complaints"
+        subtitle="Latest submissions from all users"
+        actions={<Link to="/admin/complaints" className="btn btn-outline btn-sm">View all<ArrowRight /></Link>}
+      >
+        {!complaints ? <SkeletonRows /> : recent.length === 0 ? (
+          <Empty icon={Inbox} title={complaints.length ? 'No matches' : 'No complaints yet'} text={complaints.length ? 'Try a different search.' : 'They’ll appear here as soon as users submit them.'} />
+        ) : (
+          <ComplaintTable complaints={recent} columns={['title', 'priority', 'status', 'category', 'agent', 'updated', 'note']} />
         )}
-      </div>
-    </div>
+      </Section>
+    </AppShell>
   )
 }

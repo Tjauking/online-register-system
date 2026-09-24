@@ -1,116 +1,129 @@
-import { useEffect, useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { useEffect, useMemo, useState } from 'react'
+import { Link } from 'react-router-dom'
+import { Inbox, Plus, Sparkles } from 'lucide-react'
 import api from '../../api/axios'
-import Navbar from '../../components/Navbar'
-import StatusBadge from '../../components/StatusBadge'
+import AppShell from '../../components/AppShell'
+import ComplaintTable from '../../components/ComplaintTable'
+import { Empty, Metric, PageHeader, Section, SkeletonRows } from '../../components/ui'
+import {
+  average, formatDate, formatDuration, isOpen, matches, monthDelta, monthlyCounts, resolutionTime, timeAgo
+} from '../../lib/format'
+
+const FILTERS = [
+  { key: 'all', label: 'All', test: () => true },
+  { key: 'open', label: 'Open', test: isOpen },
+  { key: 'done', label: 'Resolved', test: (c) => !isOpen(c) }
+]
 
 export default function UserDashboard() {
   const [complaints, setComplaints] = useState([])
   const [loading, setLoading] = useState(true)
-  const navigate = useNavigate()
+  const [filter, setFilter] = useState('all')
+  const [query, setQuery] = useState('')
 
   useEffect(() => {
-    api.get('/complaints/mine').then(r => {
-      setComplaints(r.data.complaints)
-      setLoading(false)
-    }).catch(() => setLoading(false))
+    api.get('/complaints/mine')
+      .then((r) => setComplaints(r.data.complaints))
+      .catch(() => {})
+      .finally(() => setLoading(false))
   }, [])
 
-  const total = complaints.length
-  const active = complaints.filter(c => !['Resolved', 'Closed'].includes(c.status)).length
-  const resolved = complaints.filter(c => ['Resolved', 'Closed'].includes(c.status)).length
+  const stats = useMemo(() => {
+    const open = complaints.filter(isOpen)
+    const done = complaints.filter((c) => !isOpen(c))
+    const all = monthlyCounts(complaints)
+    const openBars = monthlyCounts(complaints, isOpen)
+    const doneBars = monthlyCounts(complaints, (c) => !isOpen(c))
+    const highBars = monthlyCounts(complaints, (c) => c.priority === 'High')
+    const lastResolved = [...done].sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt))[0]
+    return {
+      open, done, all, openBars, doneBars, highBars, lastResolved,
+      high: complaints.filter((c) => c.priority === 'High' && isOpen(c)).length,
+      rate: complaints.length ? Math.round((done.length / complaints.length) * 100) : 0,
+      avgTime: average(done.map(resolutionTime)),
+      agents: new Set(complaints.map((c) => c.agentId?._id).filter(Boolean)).size
+    }
+  }, [complaints])
 
-  const statCards = [
-    { label: 'Total Complaints', value: total, color: '#c00000', icon: '📋' },
-    { label: 'Active', value: active, color: '#d97706', icon: '⏳' },
-    { label: 'Resolved', value: resolved, color: '#16a34a', icon: '✅' }
-  ]
+  const rows = complaints
+    .filter(FILTERS.find((f) => f.key === filter).test)
+    .filter((c) => matches(query, c.title, c.category, c.status, c.priority, c.description, c.agentId?.name))
+
+  const newButton = (
+    <Link to="/create-complaint" className="btn btn-dark"><Plus />New complaint</Link>
+  )
 
   return (
-    <div>
-      <Navbar />
-      <div style={{ maxWidth: '1100px', margin: '0 auto', padding: '32px 24px' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '28px' }}>
-          <h1 style={{ fontSize: '26px', fontWeight: 700, color: '#1a1a2e' }}>My Dashboard</h1>
-          <Link to="/create-complaint" style={{
-            background: '#c00000', color: '#fff', padding: '10px 22px',
-            borderRadius: '8px', fontWeight: 600, fontSize: '14px',
-            display: 'flex', alignItems: 'center', gap: '6px'
-          }}>
-            + New Complaint
-          </Link>
-        </div>
+    <AppShell title="Overview" search={query} onSearch={setQuery} searchPlaceholder="Search your complaints…">
+      <PageHeader title="Overview" subtitle="Here’s where your complaints stand right now" actions={newButton} />
 
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '20px', marginBottom: '32px' }}>
-          {statCards.map((s, i) => (
-            <div key={i} style={{
-              background: '#fff', borderRadius: '12px', padding: '24px',
-              boxShadow: '0 2px 12px rgba(0,0,0,0.06)', borderLeft: `4px solid ${s.color}`
-            }}>
-              <div style={{ fontSize: '28px', marginBottom: '8px' }}>{s.icon}</div>
-              <div style={{ fontSize: '32px', fontWeight: 800, color: s.color }}>{s.value}</div>
-              <div style={{ fontSize: '13px', color: '#6b7280', marginTop: '4px' }}>{s.label}</div>
+      <div className="grid grid-summary">
+        <Section
+          title="Summary"
+          icon={<span className="spark-icon"><Sparkles /></span>}
+          subtitle={loading ? 'Loading your summary…' : complaints.length === 0 ? (
+              <>You haven’t submitted any complaints yet. Once you do, you’ll see each one move from <strong>Pending</strong> to <strong>Resolved</strong> here in real time.</>
+            ) : (
+              <>
+                You have <strong>{stats.open.length} open</strong> complaint{stats.open.length === 1 ? '' : 's'}
+                {stats.high > 0 && <>, <strong>{stats.high} marked high priority</strong></>}.{' '}
+                {stats.lastResolved
+                  ? <>The most recent resolution was “{stats.lastResolved.title}” {timeAgo(stats.lastResolved.updatedAt)}.</>
+                  : <>Nothing has been resolved yet — agents will pick up your complaints from the queue.</>}
+              </>
+            )}
+          bodyClassName="section-pad"
+        >
+          <div style={{ fontWeight: 500, marginBottom: 12 }}>Resolution snapshot</div>
+          <div className="stat-grid">
+            <div className="stat-box">
+              <div className="stat-box-value">{stats.rate}%</div>
+              <div className="stat-box-label">Resolved</div>
             </div>
-          ))}
-        </div>
-
-        <div style={{ background: '#fff', borderRadius: '12px', boxShadow: '0 2px 12px rgba(0,0,0,0.06)', overflow: 'hidden' }}>
-          <div style={{ padding: '20px 24px', borderBottom: '1px solid #f0f0f0' }}>
-            <h2 style={{ fontSize: '18px', fontWeight: 700, color: '#1a1a2e' }}>My Complaints</h2>
+            <div className="stat-box">
+              <div className="stat-box-value">{formatDuration(stats.avgTime)}</div>
+              <div className="stat-box-label">Avg. time to resolve</div>
+            </div>
           </div>
+          <div className="meta-line" style={{ marginTop: 18 }}>
+            <span>Last updated:<b>{formatDate(new Date())}</b></span>
+            <span>Agents helping you:<b>{stats.agents}</b></span>
+          </div>
+        </Section>
 
-          {loading ? (
-            <div style={{ textAlign: 'center', padding: '48px', color: '#888' }}>Loading...</div>
-          ) : complaints.length === 0 ? (
-            <div style={{ textAlign: 'center', padding: '48px' }}>
-              <div style={{ fontSize: '40px', marginBottom: '12px' }}>📭</div>
-              <p style={{ color: '#888' }}>No complaints yet. <Link to="/create-complaint" style={{ color: '#c00000', fontWeight: 600 }}>Submit one now</Link></p>
-            </div>
-          ) : (
-            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-              <thead>
-                <tr style={{ background: '#fafafa' }}>
-                  {['Title', 'Category', 'Priority', 'Status', 'Agent', 'Date', ''].map(h => (
-                    <th key={h} style={{ padding: '12px 16px', textAlign: 'left', fontSize: '12px', fontWeight: 700, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.5px' }}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {complaints.map(c => (
-                  <tr key={c._id} style={{ borderTop: '1px solid #f3f4f6' }}>
-                    <td style={{ padding: '14px 16px', fontWeight: 600, fontSize: '14px' }}>{c.title}</td>
-                    <td style={{ padding: '14px 16px', fontSize: '14px', color: '#6b7280' }}>{c.category}</td>
-                    <td style={{ padding: '14px 16px' }}>
-                      <span style={{
-                        fontSize: '12px', fontWeight: 600, padding: '3px 10px', borderRadius: '12px',
-                        background: c.priority === 'High' ? '#fee2e2' : c.priority === 'Medium' ? '#fef3c7' : '#f0fdf4',
-                        color: c.priority === 'High' ? '#c00000' : c.priority === 'Medium' ? '#92400e' : '#166534'
-                      }}>
-                        {c.priority}
-                      </span>
-                    </td>
-                    <td style={{ padding: '14px 16px' }}><StatusBadge status={c.status} /></td>
-                    <td style={{ padding: '14px 16px', fontSize: '14px', color: '#6b7280' }}>{c.agentId?.name || '-'}</td>
-                    <td style={{ padding: '14px 16px', fontSize: '13px', color: '#9ca3af' }}>{new Date(c.createdAt).toLocaleDateString()}</td>
-                    <td style={{ padding: '14px 16px' }}>
-                      <button
-                        onClick={() => navigate(`/complaint/${c._id}`)}
-                        style={{
-                          background: '#c00000', color: '#fff', border: 'none',
-                          padding: '7px 16px', borderRadius: '6px', fontSize: '13px',
-                          fontWeight: 600, cursor: 'pointer'
-                        }}
-                      >
-                        View
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
+        <div className="metrics">
+          <Metric title="Submitted" value={complaints.length} delta={monthDelta(stats.all)} bars={stats.all} />
+          <Metric title="Open" value={stats.open.length} caption="by month submitted" bars={stats.openBars} />
+          <Metric title="Resolved" value={stats.done.length} caption="by month submitted" bars={stats.doneBars} />
+          <Metric title="High priority" value={stats.high} caption="open right now" bars={stats.highBars} />
         </div>
       </div>
-    </div>
+
+      <Section
+        title="Your complaints"
+        subtitle="Everything you’ve submitted, newest first"
+        actions={
+          <div className="tabs" role="tablist">
+            {FILTERS.map((f) => (
+              <button key={f.key} role="tab" aria-selected={filter === f.key} className={`tab ${filter === f.key ? 'is-active' : ''}`} onClick={() => setFilter(f.key)}>
+                {f.label}
+                <span className="mono">{complaints.filter(f.test).length}</span>
+              </button>
+            ))}
+          </div>
+        }
+      >
+        {loading ? <SkeletonRows /> : rows.length === 0 ? (
+          <Empty
+            icon={Inbox}
+            title={complaints.length ? 'No matching complaints' : 'No complaints yet'}
+            text={complaints.length ? 'Try a different filter or search.' : 'Submit your first complaint and we’ll route it to an agent.'}
+            action={!complaints.length && newButton}
+          />
+        ) : (
+          <ComplaintTable complaints={rows} columns={['title', 'priority', 'status', 'category', 'agent', 'updated', 'note']} />
+        )}
+      </Section>
+    </AppShell>
   )
 }

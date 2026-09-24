@@ -1,6 +1,8 @@
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const User = require('../models/User');
+const { serverError } = require('../utils/errors');
+const { validateNewAccount, MIN_PASSWORD } = require('../utils/validation');
 
 const generateToken = (id) => {
   return jwt.sign({ id }, process.env.JWT_SECRET, {
@@ -11,13 +13,11 @@ const generateToken = (id) => {
 
 exports.register = async (req, res) => {
   try {
-    const { name, email, phone, password, role, signupCode } = req.body;
+    const { role, signupCode } = req.body;
+    const { error, name, email, phone, password } = validateNewAccount(req.body);
+    if (error) return res.status(400).json({ message: error });
 
-    if (!name || !email || !phone || !password) {
-      return res.status(400).json({ message: 'All fields are required' });
-    }
-
-    const existing = await User.findOne({ email: email.toLowerCase() });
+    const existing = await User.findOne({ email });
     if (existing) {
       return res.status(400).json({ message: 'Email already registered' });
     }
@@ -47,7 +47,7 @@ exports.register = async (req, res) => {
 
     const user = await User.create({
       name,
-      email: email.toLowerCase(),
+      email,
       phone,
       password: hashedPassword,
       role: finalRole
@@ -60,7 +60,7 @@ exports.register = async (req, res) => {
       user: { id: user._id, name: user.name, email: user.email, role: user.role }
     });
   } catch (err) {
-    res.status(500).json({ message: 'Server error', error: err.message });
+    serverError(res, err);
   }
 };
 
@@ -68,11 +68,11 @@ exports.register = async (req, res) => {
 exports.login = async (req, res) => {
   try {
     const { email, password } = req.body;
-    if (!email || !password) {
+    if (typeof email !== 'string' || typeof password !== 'string' || !email || !password) {
       return res.status(400).json({ message: 'Email and password are required' });
     }
 
-    const user = await User.findOne({ email: email.toLowerCase() });
+    const user = await User.findOne({ email: email.trim().toLowerCase() });
     if (!user || !user.isActive) {
       return res.status(401).json({ message: 'Invalid credentials' });
     }
@@ -89,11 +89,49 @@ exports.login = async (req, res) => {
       user: { id: user._id, name: user.name, email: user.email, role: user.role }
     });
   } catch (err) {
-    res.status(500).json({ message: 'Server error', error: err.message });
+    serverError(res, err);
   }
 };
 
 // @route GET /api/auth/me
 exports.getMe = async (req, res) => {
   res.json({ user: req.user });
+};
+
+// @route PUT /api/auth/me - update your own name and phone
+exports.updateMe = async (req, res) => {
+  try {
+    const name = typeof req.body.name === 'string' ? req.body.name.trim() : '';
+    const phone = typeof req.body.phone === 'string' ? req.body.phone.trim() : '';
+    if (!name || !phone) return res.status(400).json({ message: 'Name and phone are required' });
+    if (name.length > 80 || phone.length > 30) return res.status(400).json({ message: 'Name or phone is too long' });
+
+    const user = await User.findByIdAndUpdate(req.user._id, { name, phone }, { new: true }).select('-password');
+    res.json({ user });
+  } catch (err) {
+    serverError(res, err);
+  }
+};
+
+// @route PUT /api/auth/password
+exports.changePassword = async (req, res) => {
+  try {
+    const { currentPassword, newPassword } = req.body;
+    if (typeof currentPassword !== 'string' || typeof newPassword !== 'string') {
+      return res.status(400).json({ message: 'Current and new password are required' });
+    }
+    if (newPassword.length < MIN_PASSWORD) {
+      return res.status(400).json({ message: `New password must be at least ${MIN_PASSWORD} characters` });
+    }
+
+    const user = await User.findById(req.user._id);
+    if (!(await bcrypt.compare(currentPassword, user.password))) {
+      return res.status(400).json({ message: 'Current password is incorrect' });
+    }
+    user.password = await bcrypt.hash(newPassword, await bcrypt.genSalt(10));
+    await user.save();
+    res.json({ message: 'Password updated' });
+  } catch (err) {
+    serverError(res, err);
+  }
 };

@@ -9,8 +9,10 @@ const {
   getAnalytics
 } = require('../controllers/adminController');
 const { protect, restrictTo } = require('../middleware/auth');
+const { validateId } = require('../utils/access');
 
 router.use(protect, restrictTo('ADMIN'));
+router.param('id', validateId('id'));
 
 router.get('/users', getUsers);
 router.get('/agents', getAgents);

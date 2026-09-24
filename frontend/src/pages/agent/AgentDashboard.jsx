@@ -1,20 +1,24 @@
-import { useEffect, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
-import { useAuth } from '../../context/AuthContext'
+import { useEffect, useMemo, useState } from 'react'
+import { useNavigate, useSearchParams } from 'react-router-dom'
+import { Hand, Inbox, ListChecks, Loader2 } from 'lucide-react'
 import api from '../../api/axios'
-import Navbar from '../../components/Navbar'
-import StatusBadge from '../../components/StatusBadge'
+import AppShell from '../../components/AppShell'
+import ComplaintTable from '../../components/ComplaintTable'
+import { Alert, Empty, Metric, PageHeader, Section, SkeletonRows } from '../../components/ui'
+import { isOpen, matches, monthlyCounts } from '../../lib/format'
+
+const PRIORITY_RANK = { High: 0, Medium: 1, Low: 2 }
 
 export default function AgentDashboard() {
-  const { user } = useAuth()
   const navigate = useNavigate()
+  const [params] = useSearchParams()
+  const view = params.get('view') === 'mine' ? 'mine' : 'pool'
   const [assigned, setAssigned] = useState([])
   const [pool, setPool] = useState([])
-  const [tab, setTab] = useState('pool')
-
-  useEffect(() => {
-    loadAll()
-  }, [])
+  const [loading, setLoading] = useState(true)
+  const [taking, setTaking] = useState(null)
+  const [error, setError] = useState('')
+  const [query, setQuery] = useState('')
 
   const loadAll = async () => {
     const [a, p] = await Promise.all([
@@ -23,135 +27,96 @@ export default function AgentDashboard() {
     ])
     setAssigned(a.data.complaints)
     setPool(p.data.complaints)
+    setLoading(false)
   }
 
+  useEffect(() => { loadAll() }, [])
+
   const take = async (id) => {
+    setError('')
+    setTaking(id)
     try {
       await api.put(`/complaints/${id}/take`)
-      loadAll()
+      navigate(`/complaint/${id}`)
     } catch (err) {
-      alert(err.response?.data?.message || 'Failed to take complaint')
+      setError(err.response?.data?.message || 'Failed to take complaint')
+      setTaking(null)
+      loadAll()
     }
   }
 
-  const stats = [
-    { label: 'In Pool', value: pool.length, color: '#c00000', icon: '📥' },
-    { label: 'My Assigned', value: assigned.length, color: '#d97706', icon: '📋' },
-    { label: 'Resolved', value: assigned.filter(c => ['Resolved', 'Closed'].includes(c.status)).length, color: '#16a34a', icon: '✅' }
-  ]
+  const stats = useMemo(() => {
+    const mineOpen = assigned.filter(isOpen)
+    const mineDone = assigned.filter((c) => !isOpen(c))
+    return {
+      mineOpen, mineDone,
+      poolBars: monthlyCounts(pool),
+      openBars: monthlyCounts(assigned, isOpen),
+      doneBars: monthlyCounts(assigned, (c) => !isOpen(c)),
+      highBars: monthlyCounts(pool, (c) => c.priority === 'High'),
+      highWaiting: pool.filter((c) => c.priority === 'High').length
+    }
+  }, [assigned, pool])
 
-  const tabStyle = (active) => ({
-    padding: '10px 24px', border: 'none', cursor: 'pointer', fontWeight: 600, fontSize: '14px',
-    borderBottom: active ? '2px solid #c00000' : '2px solid transparent',
-    color: active ? '#c00000' : '#6b7280', background: 'transparent'
-  })
+  // Queue is triaged: high priority first, then oldest first
+  const poolRows = [...pool]
+    .sort((a, b) => PRIORITY_RANK[a.priority] - PRIORITY_RANK[b.priority] || new Date(a.createdAt) - new Date(b.createdAt))
+    .filter((c) => matches(query, c.title, c.category, c.priority, c.description, c.userId?.name))
+  const mineRows = assigned.filter((c) => matches(query, c.title, c.category, c.status, c.priority, c.description, c.userId?.name))
+  const rows = view === 'pool' ? poolRows : mineRows
 
-  const tableHead = (cols) => (
-    <thead>
-      <tr style={{ background: '#fafafa' }}>
-        {cols.map(h => (
-          <th key={h} style={{ padding: '12px 16px', textAlign: 'left', fontSize: '12px', fontWeight: 700, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.5px' }}>{h}</th>
-        ))}
-      </tr>
-    </thead>
-  )
+  const title = view === 'pool' ? 'Queue' : 'My complaints'
 
   return (
-    <div>
-      <Navbar />
-      <div style={{ maxWidth: '1100px', margin: '0 auto', padding: '32px 24px' }}>
-        <div style={{ marginBottom: '28px' }}>
-          <h1 style={{ fontSize: '26px', fontWeight: 700, color: '#1a1a2e' }}>Agent Dashboard</h1>
-          <p style={{ color: '#888', fontSize: '14px', marginTop: '4px' }}>Agent ID: <code style={{ background: '#f3f4f6', padding: '2px 8px', borderRadius: '4px', fontSize: '13px' }}>{user?.id}</code></p>
-        </div>
+    <AppShell title={title} search={query} onSearch={setQuery} searchPlaceholder={view === 'pool' ? 'Search the queue…' : 'Search your complaints…'}
+      counts={{ pool: pool.length, mine: stats.mineOpen.length }}>
+      <PageHeader
+        title={title}
+        subtitle={view === 'pool' ? 'Unassigned complaints, highest priority and oldest first' : 'Complaints you’ve taken on'}
+      />
 
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '20px', marginBottom: '32px' }}>
-          {stats.map((s, i) => (
-            <div key={i} style={{ background: '#fff', borderRadius: '12px', padding: '24px', boxShadow: '0 2px 12px rgba(0,0,0,0.06)', borderLeft: `4px solid ${s.color}` }}>
-              <div style={{ fontSize: '28px', marginBottom: '8px' }}>{s.icon}</div>
-              <div style={{ fontSize: '32px', fontWeight: 800, color: s.color }}>{s.value}</div>
-              <div style={{ fontSize: '13px', color: '#6b7280', marginTop: '4px' }}>{s.label}</div>
-            </div>
-          ))}
-        </div>
+      <div className="metrics metrics-4">
+        <Metric title="In queue" value={pool.length} caption="by month submitted" bars={stats.poolBars} />
+        <Metric title="High priority" value={stats.highWaiting} caption="waiting in queue" bars={stats.highBars} />
+        <Metric title="Working on" value={stats.mineOpen.length} caption="by month submitted" bars={stats.openBars} />
+        <Metric title="Resolved" value={stats.mineDone.length} caption="by month submitted" bars={stats.doneBars} />
+      </div>
 
-        <div style={{ background: '#fff', borderRadius: '12px', boxShadow: '0 2px 12px rgba(0,0,0,0.06)', overflow: 'hidden' }}>
-          <div style={{ display: 'flex', borderBottom: '1px solid #f0f0f0' }}>
-            <button style={tabStyle(tab === 'pool')} onClick={() => setTab('pool')}>
-              📥 Unassigned Pool ({pool.length})
+      {error && <div style={{ marginTop: 20 }}><Alert>{error}</Alert></div>}
+
+      <Section
+        title={view === 'pool' ? 'Unassigned complaints' : 'Assigned to you'}
+        subtitle={view === 'pool' ? 'Take one to claim it — it moves to your list and the customer sees it’s assigned' : 'Open one to chat with the customer and update its status'}
+        actions={
+          <div className="tabs" role="tablist">
+            <button role="tab" aria-selected={view === 'pool'} className={`tab ${view === 'pool' ? 'is-active' : ''}`} onClick={() => navigate('/agent')}>
+              <Inbox size={15} />Queue<span className="mono">{pool.length}</span>
             </button>
-            <button style={tabStyle(tab === 'mine')} onClick={() => setTab('mine')}>
-              📋 My Complaints ({assigned.length})
+            <button role="tab" aria-selected={view === 'mine'} className={`tab ${view === 'mine' ? 'is-active' : ''}`} onClick={() => navigate('/agent?view=mine')}>
+              <ListChecks size={15} />Mine<span className="mono">{assigned.length}</span>
             </button>
           </div>
-
-          {tab === 'pool' && (
-            pool.length === 0 ? (
-              <div style={{ textAlign: 'center', padding: '48px' }}>
-                <div style={{ fontSize: '40px', marginBottom: '12px' }}>🎉</div>
-                <p style={{ color: '#888' }}>No unassigned complaints right now.</p>
-              </div>
-            ) : (
-              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                {tableHead(['Title', 'User', 'Category', 'Priority', 'Submitted', ''])}
-                <tbody>
-                  {pool.map(c => (
-                    <tr key={c._id} style={{ borderTop: '1px solid #f3f4f6' }}>
-                      <td style={{ padding: '14px 16px', fontWeight: 600, fontSize: '14px' }}>{c.title}</td>
-                      <td style={{ padding: '14px 16px', fontSize: '14px', color: '#6b7280' }}>{c.userId?.name}</td>
-                      <td style={{ padding: '14px 16px', fontSize: '14px', color: '#6b7280' }}>{c.category}</td>
-                      <td style={{ padding: '14px 16px' }}>
-                        <span style={{ fontSize: '12px', fontWeight: 600, padding: '3px 10px', borderRadius: '12px', background: c.priority === 'High' ? '#fee2e2' : c.priority === 'Medium' ? '#fef3c7' : '#f0fdf4', color: c.priority === 'High' ? '#c00000' : c.priority === 'Medium' ? '#92400e' : '#166534' }}>
-                          {c.priority}
-                        </span>
-                      </td>
-                      <td style={{ padding: '14px 16px', fontSize: '13px', color: '#9ca3af' }}>{new Date(c.createdAt).toLocaleDateString()}</td>
-                      <td style={{ padding: '14px 16px' }}>
-                        <button onClick={() => take(c._id)} style={{ background: '#16a34a', color: '#fff', border: 'none', padding: '7px 18px', borderRadius: '6px', fontSize: '13px', fontWeight: 600, cursor: 'pointer' }}>
-                          Take
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )
-          )}
-
-          {tab === 'mine' && (
-            assigned.length === 0 ? (
-              <div style={{ textAlign: 'center', padding: '48px' }}>
-                <div style={{ fontSize: '40px', marginBottom: '12px' }}>📭</div>
-                <p style={{ color: '#888' }}>You haven't taken any complaints yet. Check the pool.</p>
-              </div>
-            ) : (
-              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                {tableHead(['Title', 'User', 'Category', 'Priority', 'Status', ''])}
-                <tbody>
-                  {assigned.map(c => (
-                    <tr key={c._id} style={{ borderTop: '1px solid #f3f4f6' }}>
-                      <td style={{ padding: '14px 16px', fontWeight: 600, fontSize: '14px' }}>{c.title}</td>
-                      <td style={{ padding: '14px 16px', fontSize: '14px', color: '#6b7280' }}>{c.userId?.name}</td>
-                      <td style={{ padding: '14px 16px', fontSize: '14px', color: '#6b7280' }}>{c.category}</td>
-                      <td style={{ padding: '14px 16px' }}>
-                        <span style={{ fontSize: '12px', fontWeight: 600, padding: '3px 10px', borderRadius: '12px', background: c.priority === 'High' ? '#fee2e2' : '#fef3c7', color: c.priority === 'High' ? '#c00000' : '#92400e' }}>
-                          {c.priority}
-                        </span>
-                      </td>
-                      <td style={{ padding: '14px 16px' }}><StatusBadge status={c.status} /></td>
-                      <td style={{ padding: '14px 16px' }}>
-                        <button onClick={() => navigate(`/complaint/${c._id}`)} style={{ background: '#c00000', color: '#fff', border: 'none', padding: '7px 16px', borderRadius: '6px', fontSize: '13px', fontWeight: 600, cursor: 'pointer' }}>
-                          Open
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )
-          )}
-        </div>
-      </div>
-    </div>
+        }
+      >
+        {loading ? <SkeletonRows /> : rows.length === 0 ? (
+          view === 'pool'
+            ? <Empty icon={Inbox} title={pool.length ? 'No matches' : 'Queue is clear'} text={pool.length ? 'Try a different search.' : 'New complaints will show up here as soon as they’re submitted.'} />
+            : <Empty icon={ListChecks} title={assigned.length ? 'No matches' : 'Nothing assigned yet'} text={assigned.length ? 'Try a different search.' : 'Take a complaint from the queue to get started.'}
+                action={!assigned.length && <button className="btn btn-dark" onClick={() => navigate('/agent')}><Inbox />Open queue</button>} />
+        ) : view === 'pool' ? (
+          <ComplaintTable
+            complaints={rows}
+            columns={['title', 'user', 'priority', 'category', 'submitted', 'note']}
+            action={(c) => (
+              <button className="btn btn-sm btn-accent" onClick={() => take(c._id)} disabled={taking !== null}>
+                {taking === c._id ? <Loader2 className="spin" /> : <Hand />}Take
+              </button>
+            )}
+          />
+        ) : (
+          <ComplaintTable complaints={rows} columns={['title', 'user', 'priority', 'status', 'category', 'updated', 'note']} />
+        )}
+      </Section>
+    </AppShell>
   )
 }

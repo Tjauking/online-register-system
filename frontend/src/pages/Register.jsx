@@ -1,8 +1,17 @@
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
+import { ArrowRight, Loader2 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 import api from '../api/axios'
-import Navbar from '../components/Navbar'
+import AuthLayout from '../components/AuthLayout'
+import { Alert } from '../components/ui'
+import { homeFor } from './Login'
+
+const ROLES = [
+  { value: 'USER', label: 'User', hint: 'Submit and track complaints' },
+  { value: 'AGENT', label: 'Agent', hint: 'Resolve complaints · needs the agent code' },
+  { value: 'ADMIN', label: 'Admin', hint: 'Manage the team · needs the admin code' }
+]
 
 export default function Register() {
   const [form, setForm] = useState({ name: '', email: '', phone: '', password: '', role: 'USER', signupCode: '' })
@@ -11,6 +20,8 @@ export default function Register() {
   const { login } = useAuth()
   const navigate = useNavigate()
 
+  const set = (key) => (e) => setForm({ ...form, [key]: e.target.value })
+
   const handleSubmit = async (e) => {
     e.preventDefault()
     setError('')
@@ -18,127 +29,71 @@ export default function Register() {
     try {
       const { data } = await api.post('/auth/register', form)
       login(data.token, data.user)
-      if (data.user.role === 'ADMIN') navigate('/admin')
-      else if (data.user.role === 'AGENT') navigate('/agent')
-      else navigate('/dashboard')
+      navigate(homeFor(data.user.role))
     } catch (err) {
       setError(err.response?.data?.message || 'Registration failed')
-    } finally {
       setLoading(false)
     }
   }
 
-  const inp = (label, key, type = 'text', placeholder = '') => (
-    <div style={{ marginBottom: '16px' }}>
-      <label style={{ display: 'block', fontWeight: 600, fontSize: '13px', marginBottom: '7px', color: '#374151' }}>
-        {label}
-      </label>
-      <input
-        type={type}
-        value={form[key]}
-        placeholder={placeholder}
-        onChange={e => setForm({ ...form, [key]: e.target.value })}
-        required
-        style={{
-          width: '100%', padding: '11px 14px', border: '1.5px solid #e5e7eb',
-          borderRadius: '8px', fontSize: '14px', outline: 'none'
-        }}
-        onFocus={e => e.target.style.border = '1.5px solid #c00000'}
-        onBlur={e => e.target.style.border = '1.5px solid #e5e7eb'}
-      />
-    </div>
-  )
+  const role = ROLES.find((r) => r.value === form.role)
 
   return (
-    <div>
-      <Navbar />
-      <div style={{
-        minHeight: 'calc(100vh - 64px)', display: 'flex', alignItems: 'center',
-        justifyContent: 'center', padding: '24px',
-        background: 'linear-gradient(135deg, #f8f9fa 0%, #fee2e2 100%)'
-      }}>
-        <div style={{
-          background: '#fff', borderRadius: '16px', padding: '40px',
-          width: '100%', maxWidth: '460px',
-          boxShadow: '0 8px 40px rgba(192,0,0,0.12)'
-        }}>
-          <div style={{ textAlign: 'center', marginBottom: '28px' }}>
-            <div style={{ fontSize: '36px', marginBottom: '8px' }}>📋</div>
-            <h2 style={{ fontSize: '24px', fontWeight: 700, color: '#1a1a2e' }}>Create Account</h2>
-            <p style={{ color: '#888', fontSize: '14px', marginTop: '6px' }}>Join the complaint management system</p>
+    <AuthLayout
+      title="Create your account"
+      subtitle="It takes less than a minute"
+      footer={<>Already have an account? <Link to="/login">Sign in</Link></>}
+    >
+      <form onSubmit={handleSubmit}>
+        {error && <div style={{ marginBottom: 16 }}><Alert>{error}</Alert></div>}
+
+        <div className="field">
+          <span className="label">I’m joining as</span>
+          <div className="role-seg" role="radiogroup" aria-label="Account type">
+            {ROLES.map((r) => (
+              <button type="button" key={r.value} role="radio" aria-checked={form.role === r.value}
+                className={form.role === r.value ? 'is-active' : ''}
+                onClick={() => setForm({ ...form, role: r.value, signupCode: '' })}>
+                {r.label}
+              </button>
+            ))}
           </div>
-
-          {error && (
-            <div style={{
-              background: '#fee2e2', color: '#b91c1c', padding: '12px 16px',
-              borderRadius: '8px', marginBottom: '18px', fontSize: '14px', borderLeft: '4px solid #c00000'
-            }}>
-              {error}
-            </div>
-          )}
-
-          <form onSubmit={handleSubmit}>
-            <div style={{ marginBottom: '16px' }}>
-              <label style={{ display: 'block', fontWeight: 600, fontSize: '13px', marginBottom: '7px', color: '#374151' }}>
-                Register As
-              </label>
-              <select
-                value={form.role}
-                onChange={e => setForm({ ...form, role: e.target.value, signupCode: '' })}
-                style={{
-                  width: '100%', padding: '11px 14px', border: '1.5px solid #e5e7eb',
-                  borderRadius: '8px', fontSize: '14px', outline: 'none', background: '#fff'
-                }}
-              >
-                <option value="USER">User</option>
-                <option value="AGENT">Agent</option>
-                <option value="ADMIN">Admin</option>
-              </select>
-            </div>
-
-            {inp('Full Name', 'name')}
-            {inp('Email Address', 'email', 'email')}
-            {inp('Phone Number', 'phone', 'tel')}
-            {inp('Password', 'password', 'password')}
-
-            {form.role !== 'USER' && (
-              <div style={{ marginBottom: '16px' }}>
-                <label style={{ display: 'block', fontWeight: 600, fontSize: '13px', marginBottom: '7px', color: '#374151' }}>
-                  {form.role === 'AGENT' ? 'Agent Signup Code' : 'Admin Signup Code'}
-                </label>
-                <input
-                  type="text"
-                  value={form.signupCode}
-                  onChange={e => setForm({ ...form, signupCode: e.target.value })}
-                  required
-                  placeholder="Enter secret code"
-                  style={{
-                    width: '100%', padding: '11px 14px', border: '1.5px solid #c00000',
-                    borderRadius: '8px', fontSize: '14px', outline: 'none'
-                  }}
-                />
-              </div>
-            )}
-
-            <button
-              type="submit"
-              disabled={loading}
-              style={{
-                width: '100%', padding: '12px', background: loading ? '#999' : '#c00000',
-                color: '#fff', border: 'none', borderRadius: '8px',
-                fontWeight: 700, fontSize: '15px', marginTop: '6px'
-              }}
-            >
-              {loading ? 'Creating Account...' : 'Create Account'}
-            </button>
-          </form>
-
-          <p style={{ textAlign: 'center', marginTop: '20px', fontSize: '14px', color: '#666' }}>
-            Already have an account?{' '}
-            <Link to="/login" style={{ color: '#c00000', fontWeight: 600 }}>Login here</Link>
-          </p>
+          <span className="muted" style={{ fontSize: 12.5 }}>{role.hint}</span>
         </div>
-      </div>
-    </div>
+
+        <div className="field">
+          <label className="label" htmlFor="name">Full name</label>
+          <input id="name" className="input" autoComplete="name" value={form.name} onChange={set('name')} required />
+        </div>
+        <div className="field-row" style={{ marginTop: 16 }}>
+          <div className="field">
+            <label className="label" htmlFor="email">Email</label>
+            <input id="email" type="email" autoComplete="email" className="input" value={form.email} onChange={set('email')} required />
+          </div>
+          <div className="field" style={{ marginTop: 0 }}>
+            <label className="label" htmlFor="phone">Phone</label>
+            <input id="phone" type="tel" autoComplete="tel" className="input" value={form.phone} onChange={set('phone')} required />
+          </div>
+        </div>
+        <div className="field">
+          <label className="label" htmlFor="password">Password <span className="hint">At least 8 characters</span></label>
+          <input id="password" type="password" autoComplete="new-password" className="input" value={form.password} onChange={set('password')} required minLength={8} />
+        </div>
+
+        {form.role !== 'USER' && (
+          <div className="field">
+            <label className="label" htmlFor="code">{role.label} signup code</label>
+            <input id="code" className="input mono" value={form.signupCode} onChange={set('signupCode')} required autoComplete="off"
+              placeholder="Ask your administrator" />
+          </div>
+        )}
+
+        <button type="submit" className="btn btn-dark btn-lg btn-block" style={{ marginTop: 24 }} disabled={loading}>
+          {loading ? <Loader2 className="spin" /> : null}
+          {loading ? 'Creating account…' : 'Create account'}
+          {!loading && <ArrowRight />}
+        </button>
+      </form>
+    </AuthLayout>
   )
 }

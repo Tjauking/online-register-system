@@ -1,7 +1,11 @@
 import { useState } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
+import { useNavigate, useParams } from 'react-router-dom'
+import { Loader2, Star } from 'lucide-react'
 import api from '../../api/axios'
-import Navbar from '../../components/Navbar'
+import AppShell from '../../components/AppShell'
+import { Alert, PageHeader, Section } from '../../components/ui'
+
+const LABELS = ['', 'Poor', 'Fair', 'Good', 'Very good', 'Excellent']
 
 export default function Feedback() {
   const { id } = useParams()
@@ -13,92 +17,61 @@ export default function Feedback() {
   const [success, setSuccess] = useState(false)
   const [loading, setLoading] = useState(false)
 
-  const handleSubmit = async () => {
-    if (rating === 0) { setError('Please select a star rating'); return }
+  const handleSubmit = async (e) => {
+    e.preventDefault()
+    if (rating === 0) return setError('Please choose a star rating')
     setError('')
     setLoading(true)
     try {
       await api.post('/feedback', { complaintId: id, rating, comment })
       setSuccess(true)
-      setTimeout(() => navigate('/dashboard'), 1400)
+      setTimeout(() => navigate(`/complaint/${id}`), 1000)
     } catch (err) {
       setError(err.response?.data?.message || 'Failed to submit feedback')
-    } finally {
       setLoading(false)
     }
   }
 
+  const shown = hovered || rating
+
   return (
-    <div>
-      <Navbar />
-      <div style={{
-        minHeight: 'calc(100vh - 64px)', display: 'flex', alignItems: 'center',
-        justifyContent: 'center', padding: '24px',
-        background: 'linear-gradient(135deg, #f8f9fa 0%, #fee2e2 100%)'
-      }}>
-        <div style={{
-          background: '#fff', borderRadius: '16px', padding: '40px',
-          width: '100%', maxWidth: '460px',
-          boxShadow: '0 8px 40px rgba(192,0,0,0.12)', textAlign: 'center'
-        }}>
-          <div style={{ fontSize: '48px', marginBottom: '12px' }}>⭐</div>
-          <h2 style={{ fontSize: '24px', fontWeight: 700, color: '#1a1a2e', marginBottom: '8px' }}>Rate Your Experience</h2>
-          <p style={{ color: '#888', fontSize: '14px', marginBottom: '28px' }}>How satisfied are you with the resolution?</p>
+    <AppShell title="Rate resolution" parent="Complaints">
+      <PageHeader title="Rate the resolution" subtitle="Your rating goes straight to the team’s performance dashboard" />
+      <div style={{ maxWidth: 560 }}>
+        <Section title="How did we do?" bodyClassName="section-pad">
+          <form onSubmit={handleSubmit}>
+            {error && <div style={{ marginBottom: 16 }}><Alert>{error}</Alert></div>}
+            {success && <div style={{ marginBottom: 16 }}><Alert type="success">Thanks for the feedback!</Alert></div>}
 
-          {error && (
-            <div style={{ background: '#fee2e2', color: '#b91c1c', padding: '12px', borderRadius: '8px', marginBottom: '18px', fontSize: '14px' }}>{error}</div>
-          )}
-          {success && (
-            <div style={{ background: '#dcfce7', color: '#166534', padding: '12px', borderRadius: '8px', marginBottom: '18px', fontSize: '14px' }}>✅ Thank you! Redirecting...</div>
-          )}
-
-          <div style={{ display: 'flex', justifyContent: 'center', gap: '8px', marginBottom: '24px' }}>
-            {[1, 2, 3, 4, 5].map(n => (
-              <span
-                key={n}
-                onClick={() => setRating(n)}
-                onMouseEnter={() => setHovered(n)}
-                onMouseLeave={() => setHovered(0)}
-                style={{
-                  fontSize: '40px', cursor: 'pointer',
-                  color: n <= (hovered || rating) ? '#f59e0b' : '#d1d5db',
-                  transition: 'color 0.1s, transform 0.1s',
-                  transform: n <= (hovered || rating) ? 'scale(1.15)' : 'scale(1)',
-                  display: 'inline-block'
-                }}
-              >
-                ★
-              </span>
-            ))}
-          </div>
-
-          {rating > 0 && (
-            <div style={{ marginBottom: '6px', fontSize: '14px', fontWeight: 600, color: '#c00000' }}>
-              {['', 'Poor', 'Fair', 'Good', 'Very Good', 'Excellent'][rating]}
+            <div className="stars" role="radiogroup" aria-label="Rating" onMouseLeave={() => setHovered(0)}>
+              {[1, 2, 3, 4, 5].map((n) => (
+                <button type="button" key={n} role="radio" aria-checked={rating === n} aria-label={`${n} star${n > 1 ? 's' : ''}`}
+                  className={`star ${n <= shown ? 'is-on' : ''}`}
+                  onClick={() => setRating(n)} onMouseEnter={() => setHovered(n)}>
+                  <Star />
+                </button>
+              ))}
             </div>
-          )}
+            <div className="mono" style={{ textAlign: 'center', height: 20, margin: '10px 0 18px', color: 'var(--text-2)', fontSize: 13 }}>
+              {shown ? `${shown}/5 · ${LABELS[shown]}` : 'Select a rating'}
+            </div>
 
-          <textarea
-            value={comment}
-            onChange={e => setComment(e.target.value)}
-            rows={4}
-            placeholder="Share your experience (optional)..."
-            style={{
-              width: '100%', padding: '12px', border: '1.5px solid #e5e7eb', borderRadius: '8px',
-              fontSize: '14px', outline: 'none', resize: 'vertical', marginTop: '16px', marginBottom: '20px'
-            }}
-            onFocus={e => e.target.style.border = '1.5px solid #c00000'}
-            onBlur={e => e.target.style.border = '1.5px solid #e5e7eb'}
-          />
+            <div className="field">
+              <label className="label" htmlFor="comment">Comment <span className="hint">Optional</span></label>
+              <textarea id="comment" className="textarea" rows={4} value={comment} onChange={(e) => setComment(e.target.value)}
+                maxLength={1000} placeholder="What went well, and what could have been better?" />
+            </div>
 
-          <button onClick={handleSubmit} disabled={loading} style={{
-            width: '100%', padding: '13px', background: loading ? '#999' : '#c00000',
-            color: '#fff', border: 'none', borderRadius: '8px', fontWeight: 700, fontSize: '15px', cursor: 'pointer'
-          }}>
-            {loading ? 'Submitting...' : 'Submit Feedback'}
-          </button>
-        </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 20 }}>
+              <button type="button" className="btn btn-outline" onClick={() => navigate(`/complaint/${id}`)}>Cancel</button>
+              <button type="submit" className="btn btn-dark" disabled={loading}>
+                {loading && <Loader2 className="spin" />}
+                {loading ? 'Submitting…' : 'Submit feedback'}
+              </button>
+            </div>
+          </form>
+        </Section>
       </div>
-    </div>
+    </AppShell>
   )
 }

@@ -1,7 +1,9 @@
 import axios from 'axios'
 
+export const API_ORIGIN = import.meta.env.VITE_API_URL || `http://${window.location.hostname}:5000`
+
 const api = axios.create({
-  baseURL: `http://${window.location.hostname}:5000/api`
+  baseURL: `${API_ORIGIN}/api`
 })
 
 api.interceptors.request.use((config) => {
@@ -13,10 +15,12 @@ api.interceptors.request.use((config) => {
 api.interceptors.response.use(
   (res) => res,
   (err) => {
-    if (err.response?.status === 401) {
+    // A 401 from login/register is just a wrong password; let the form show it
+    const isAuthForm = /\/auth\/(login|register)$/.test(err.config?.url || '')
+    if (err.response?.status === 401 && !isAuthForm) {
       localStorage.removeItem('cms_token')
       localStorage.removeItem('cms_user')
-      window.location.href = '/login'
+      if (window.location.pathname !== '/login') window.location.href = '/login'
     }
     return Promise.reject(err)
   }
