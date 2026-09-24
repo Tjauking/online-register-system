@@ -11,8 +11,8 @@ const SENTIMENTS = ['positive', 'neutral', 'negative', 'frustrated'];
 const config = () => ({
   apiKey: process.env.NVIDIA_API_KEY || '',
   baseUrl: (process.env.NVIDIA_BASE_URL || 'https://integrate.api.nvidia.com/v1').replace(/\/$/, ''),
-  model: process.env.NVIDIA_MODEL || 'nvidia/llama-3.1-nemotron-70b-instruct',
-  timeoutMs: parseInt(process.env.NVIDIA_TIMEOUT_MS || '30000', 10)
+  model: process.env.NVIDIA_MODEL || 'mistralai/mistral-nemotron',
+  timeoutMs: parseInt(process.env.NVIDIA_TIMEOUT_MS || '60000', 10)
 });
 
 const isEnabled = () => Boolean(config().apiKey);
@@ -34,16 +34,23 @@ async function complete(messages, { maxTokens = 400, temperature = 0.2 } = {}) {
   const { apiKey, baseUrl, model, timeoutMs } = config();
   if (!apiKey) throw new AIError('AI features are not configured on this server', 503, 'AI_DISABLED');
 
+  // The free tier usually answers in 1-2s but sometimes queues or returns a 5xx,
+  // so retry once on server errors and dropped connections (not after a timeout)
   let res;
-  try {
-    res = await fetch(`${baseUrl}/chat/completions`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json', Accept: 'application/json' },
-      body: JSON.stringify({ model, messages, max_tokens: maxTokens, temperature, top_p: 0.9, stream: false }),
-      signal: AbortSignal.timeout(timeoutMs)
-    });
-  } catch (err) {
-    throw new AIError(err.name === 'TimeoutError' ? 'The AI model took too long to respond' : 'Could not reach the AI service', 504);
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      res = await fetch(`${baseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({ model, messages, max_tokens: maxTokens, temperature, top_p: 0.9, stream: false }),
+        signal: AbortSignal.timeout(timeoutMs)
+      });
+    } catch (err) {
+      if (err.name === 'TimeoutError') throw new AIError('The AI model took too long to respond', 504);
+      if (attempt === 2) throw new AIError('Could not reach the AI service', 504);
+      continue;
+    }
+    if (res.status < 500 || attempt === 2) break;
   }
 
   if (res.status === 401 || res.status === 403) throw new AIError('The NVIDIA API key was rejected', 503, 'AI_AUTH');

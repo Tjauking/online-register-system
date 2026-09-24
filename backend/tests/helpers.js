@@ -42,6 +42,10 @@ async function startMockAi() {
       const system = body.messages?.[0]?.content || '';
       const user = body.messages?.[1]?.content || '';
       let content;
+      if (user.includes('MOCK_FLAKY') && !requests.some((r, i) => i < requests.length - 1 && JSON.stringify(r.body).includes('MOCK_FLAKY'))) {
+        res.writeHead(500).end('{}');
+        return;
+      }
       if (user.includes('MOCK_GARBAGE')) content = 'Sorry, I cannot help with that.';
       else if (user.includes('MOCK_RATE_LIMIT')) { res.writeHead(429).end('{}'); return; }
       else if (system.includes('You triage complaints')) {

@@ -490,6 +490,13 @@ describe('API, sockets and flows', { concurrency: false }, async () => {
       assert.equal((await api.post('/api/ai/triage', { token: t.agent, body: { description: 'long enough description here' } })).status, 403);
     });
 
+    it('retries once when the AI service has a server error', async () => {
+      const before = ai.requests.length;
+      const r = await api.post('/api/ai/triage', { token: t.user, body: { description: 'MOCK_FLAKY the Wi-Fi keeps dropping in block C' } });
+      assert.equal(r.status, 200);
+      assert.equal(ai.requests.length - before, 2);
+    });
+
     it('surfaces unusable model output and upstream rate limits cleanly', async () => {
       const junk = await api.post('/api/ai/triage', { token: t.user, body: { description: 'MOCK_GARBAGE please help me with this' } });
       assert.equal(junk.status, 502);
